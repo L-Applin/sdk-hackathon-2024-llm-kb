@@ -9,55 +9,70 @@ import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeAsyncClient;
 import software.amazon.awssdk.services.bedrockruntime.model.InvokeModelRequest;
 import software.amazon.awssdk.services.bedrockruntime.model.InvokeModelResponse;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 
+import static java.nio.file.StandardOpenOption.APPEND;
+import static java.nio.file.StandardOpenOption.CREATE;
 import static software.amazon.awssdk.Constant.CLAUDE_V2_ID;
 import static software.amazon.awssdk.services.bedrockagentruntime.model.RetrieveAndGenerateType.KNOWLEDGE_BASE;
+import static software.amazon.awssdk.utils.FunctionalUtils.invokeSafely;
 
 public class QuestionEvaluator {
-    private BedrockAgentRuntimeAsyncClient bedrockAgentClient;
-    private BedrockRuntimeAsyncClient bedrockRuntimeAsyncClient;
-    private String knowledgeBaseId;
+    private final Path path;
+    private final BedrockAgentRuntimeAsyncClient bedrockAgentClient;
+    private final BedrockRuntimeAsyncClient bedrockRuntimeAsyncClient;
+    private final String knowledgeBaseId;
 
     public QuestionEvaluator() {
         this.knowledgeBaseId = Constant.KB_ID;
         this.bedrockAgentClient = Constant.BEDROCK_AGENT_RUNTIME_CLIENT;
         this.bedrockRuntimeAsyncClient = Constant.BEDROCK_RUNTIME_CLIENT;
+        this.path = Path.of("responses", String.format("evaluation-%s.txt", DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(LocalDateTime.now())));
     }
 
-    public void evaluateResonseFor(String prompt) {
+    public void evaluateResponseFor(String prompt) {
+        invokeSafely(() -> Files.writeString(path, "========== Starting conversation ==========\n", CREATE));
+        out("========== PROMPT ==========");
+        out(prompt);
+
         Question question = new Question();
-        question.question = prompt;
+        question.prompt = prompt;
 
         // ask the prompt to the KB
         question.kbAnswer = invokeKb(prompt);
+        out("========== KB ANSWER (#1) ==========");
+        out(question.kbAnswer);
 
         // ask the same prompt to Claude
         question.claudeAnswer = invokeClaude(prompt);
+        out("========== CLAUDE ANSWER (#2) ==========");
+        out(question.claudeAnswer);
 
         // ask models to evaluate questions
         String evaluationPrompt =
                 STR."""
-                Question: \{question.question}
-                Answer #1: \{question.kbAnswer}
-                Answer #2: \{question.claudeAnswer}
+                Question:\{question.prompt}
+                Answer #1:\{question.kbAnswer}
+                Answer #2:\{question.claudeAnswer}
 
                 Given the question about the AWS SDK for Java, state wether Answer #1 or Answer #2 provides
                 the most accurate answer.
                 Explain why the chosen better answer is the better one.
                 """;
 
-        System.out.println(STR."evaluation prompt: \{evaluationPrompt}");
+        String kbEvaluation = invokeKb(evaluationPrompt);
+        out("========== KB evaluation ===========");
+        out(kbEvaluation);
+        out("\n");
 
         String claudeEvaluation = invokeClaude(evaluationPrompt);
-        System.out.println("========== Claude evaluation ===========");
-        System.out.println(claudeEvaluation);
-        System.out.println();
-
-        String kbEvaluation = invokeKb(evaluationPrompt);
-        System.out.println("========== KB evaluation ===========");
-        System.out.println(kbEvaluation);
-        System.out.println();
+        out("========== Claude evaluation ===========");
+        out(claudeEvaluation);
+        out("\n");
     }
 
     private String invokeKb(String prompt) {
@@ -98,20 +113,24 @@ public class QuestionEvaluator {
     }
 
     static class Question {
-        private String question;
+        private String prompt;
         private String kbAnswer;
         private String claudeAnswer;
     }
 
+    private void out(String msg) {
+        invokeSafely(() -> Files.writeString(path, STR."\{msg}\n", APPEND));
+        System.out.println(msg);
+    }
+
     public static void main(String[] args) {
-        String question = "Hi. Can you point me to a java example where one does client side encryption with the DDB Enhanced Client with a KMS key from a different account than the one hosting the table?";
-        String requestHandlerQ = """
-               There are two versions of the AWS SDK for Java: v1 (1.x) and v2 (2.x).
-               Version 1 will reach end-of-life on December 31, 2025 so customers need help migrating to v2.
-               Using the context of the current conversation, answer the question:
-               What's the v2 equivalent of RequestHandler2? Is it ExecutionInterceptor?
+        String socketQuestion = "How to map setSocketBufferSizeHints in ClientConfiguration (sdk v1) to sdk v2?";
+        String fullPrompt = STR."""
+               Keep your answer brief.
+               Answer the following question related to the AWS SDK for Java:
+               \{socketQuestion}
                """;
         QuestionEvaluator evaluator = new QuestionEvaluator();
-        evaluator.evaluateResonseFor(requestHandlerQ);
+        evaluator.evaluateResponseFor(fullPrompt);
     }
 }
